@@ -1,0 +1,13 @@
+**/*.out
+**/*.tfstate
+**/*.tfstate.backup
+**/.*.sw?
+**/.bundle
+**/.idea
+**/.ruby-version
+**/.terraform
+**/.terraform.lock.hcl
+**/.terragrunt-cache
+**/.vscode
+**/terragrunt.iml
+**/vendor

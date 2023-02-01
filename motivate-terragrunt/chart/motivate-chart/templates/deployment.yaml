@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: motivate
+  namespace: motivate
+  labels:
+    app: motivate
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: motivate
+  template:
+    metadata:
+      labels:
+        app: motivate
+      annotations:
+        consul.hashicorp.com/connect-inject: "true"   
+    spec:
+      containers:
+        - name: motivate
+          image:
+          ports:
+            - containerPort: 8080

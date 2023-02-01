@@ -1,0 +1,6 @@
+apiVersion: v2
+name: motivate_chart
+description: Basic Helm chart for deploying the Motivate App
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

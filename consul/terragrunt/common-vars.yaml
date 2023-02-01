@@ -1,0 +1,3 @@
+aws_region: "us-east-1"
+cluster_context_name: "motivate"
+kube_config: "/home/sheehandustryn/.kube/config"

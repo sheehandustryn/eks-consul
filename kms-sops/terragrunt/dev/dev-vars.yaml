@@ -1,0 +1,10 @@
+aws_profile: ""
+aws_role_arn: ""
+bypass_policy_lockout_safety_check: "false"
+customer_master_key_spec: "SYMMETRIC_DEFAULT"
+deletion_window_in_days: 7
+enable_key_rotation: "false"
+environment: "dev"
+is_enabled: "true"
+key_usage: "ENCRYPT_DECRYPT"
+version: "1.0.0"

@@ -1,0 +1,28 @@
+global:
+ enabled: true
+ name: consul
+ datacenter: dc1
+ tls:
+   enabled: true
+ acls:
+   manageSystemACLs: true
+server:
+ enabled: true
+ replicas: 1
+ui:
+ enabled: true
+ service:
+   type: ClusterIP
+connectInject:
+ enabled: true
+ingressGateways:
+  enabled: true
+  defaults:
+    affinity: null
+  gateways:
+    - name: ingress-gateway
+      service:
+        type: ClusterIP
+        ports:
+          - port: 8080
+      replicas: 1

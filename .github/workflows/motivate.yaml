@@ -1,0 +1,477 @@
+name: Motivate Deploy
+on:
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+env:
+  tf_version: latest
+  tg_version: latest
+  tf_working_dir: .
+jobs:
+  eks-formatting:
+    name: eks-formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: terraform-format
+        uses: the-commons-project/terragrunt-github-actions@master
+        with:
+          tf_actions_version: ${{ env.tf_version }}
+          tg_actions_version: ${{ env.tg_version }}
+          tf_actions_binary: terraform
+          tf_actions_subcommand: fmt
+          tf_actions_working_dir: "${{ env.tf_working_dir }}/eks/terraform/cluster"
+          tf_actions_comment: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  eks-validation:
+    name: eks-validation
+    needs: eks-formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Terragrunt Setup
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.43.0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Terragrunt Validate
+        run: |
+          terragrunt init --terragrunt-non-interactive
+          terragrunt validate --terragrunt-non-interactive
+        working-directory: "${{ env.tf_working_dir }}/eks/terragrunt/dev"
+  eks-planning:
+    name: eks-planning
+    needs: eks-validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Terragrunt Setup
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.43.0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Terragrunt Plan
+        run: |
+          ls -al
+          terragrunt init --terragrunt-non-interactive
+          terragrunt run-all plan --terragrunt-non-interactive
+        working-directory: "${{ env.tf_working_dir }}/eks/terragrunt/dev"
+  eks-apply:
+    name: eks-apply
+    needs: eks-planning
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Terragrunt Setup
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.43.0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Terragrunt Apply
+        run: |
+          terragrunt init --terragrunt-non-interactive
+          terragrunt run-all apply --terragrunt-non-interactive
+        working-directory: "${{ env.tf_working_dir }}/eks/terragrunt/dev"
+      - name: Debug
+        run: |
+          sudo chmod +x ../../../sops-v3.7.3.linux
+          ../../../sops-v3.7.3.linux --encrypt -k ${{ secrets.SOPS_KEY }} kubeconfig.yaml > kubeconfig.enc.yaml
+        working-directory: "${{ env.tf_working_dir }}/eks/terragrunt/dev"
+      - name: Upload Kubeconfig
+        uses: actions/upload-artifact@v3
+        with:
+          name: kubeconfig
+          path: ./eks/terragrunt/dev/kubeconfig.enc.yaml
+  secrets-gen:
+    name: secrets-gen
+    needs: eks-apply
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: generate
+        run: |
+          touch unencrypted.yaml
+          echo "cluster_endpoint: $(aws eks describe-cluster --name motivate --query 'cluster.endpoint')" >> unencrypted.yaml
+          echo "cluster_certificate_authority_data: $(aws eks describe-cluster --name motivate --query 'cluster.certificateAuthority.data')" >> unencrypted.yaml
+          echo "cluster_name: motivate" >> unencrypted.yaml
+          sudo chmod +x sops-v3.7.3.linux
+          ./sops-v3.7.3.linux --encrypt -k ${{ secrets.SOPS_KEY }} unencrypted.yaml > secrets.enc.yaml
+          rm unencrypted.yaml
+      - name: Upload secrets file
+        uses: actions/upload-artifact@v3
+        with:
+          name: secrets
+          path: ./secrets.enc.yaml
+  consul-formatting:
+    name: consul-formatting
+    needs: secrets-gen
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: terraform-format
+        uses: the-commons-project/terragrunt-github-actions@master
+        with:
+          tf_actions_version: ${{ env.tf_version }}
+          tg_actions_version: ${{ env.tg_version }}
+          tf_actions_binary: terraform
+          tf_actions_subcommand: fmt
+          tf_actions_working_dir: "${{ env.tf_working_dir }}/consul/terraform/consul"
+          tf_actions_comment: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  consul-validation:
+    name: consul-validation
+    needs: consul-formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Download secrets
+        uses: actions/download-artifact@v3
+        with:
+          name: secrets
+          path: "${{ env.tf_working_dir }}/consul/terragrunt/dev"
+      - name: Terragrunt Setup
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.43.0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Terragrunt Validate
+        run: |
+          terragrunt init --terragrunt-non-interactive
+          terragrunt validate --terragrunt-non-interactive
+        working-directory: "${{ env.tf_working_dir }}/consul/terragrunt/dev"
+  consul-planning:
+    name: consul-planning
+    needs: consul-validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Download secrets
+        uses: actions/download-artifact@v3
+        with:
+          name: secrets
+          path: "${{ env.tf_working_dir }}/consul/terragrunt/dev"
+      - name: Terragrunt Setup
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.43.0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Terragrunt Plan
+        run: |
+          terragrunt init --terragrunt-non-interactive
+          terragrunt run-all plan --terragrunt-non-interactive
+        working-directory: "${{ env.tf_working_dir }}/consul/terragrunt/dev"
+  consul-apply:
+    name: consul-apply
+    needs: consul-planning
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Download secrets
+        uses: actions/download-artifact@v3
+        with:
+          name: secrets
+          path: "${{ env.tf_working_dir }}/consul/terragrunt/dev"
+      - name: Terragrunt Setup
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.43.0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Terragrunt Apply
+        run: |
+          terragrunt init --terragrunt-non-interactive
+          terragrunt run-all apply --terragrunt-non-interactive
+        working-directory: "${{ env.tf_working_dir }}/consul/terragrunt/dev"
+  ecr-formatting:
+    name: ecr-formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: terraform-format
+        uses: the-commons-project/terragrunt-github-actions@master
+        with:
+          tf_actions_version: ${{ env.tf_version }}
+          tg_actions_version: ${{ env.tg_version }}
+          tf_actions_binary: terraform
+          tf_actions_subcommand: fmt
+          tf_actions_working_dir: "${{ env.tf_working_dir }}/ecr/terraform/ecr"
+          tf_actions_comment: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  ecr-validation:
+    name: ecr-validation
+    needs: ecr-formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Terragrunt Setup
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.43.0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Terragrunt Validate
+        run: |
+          terragrunt init --terragrunt-non-interactive
+          terragrunt validate --terragrunt-non-interactive
+        working-directory: "${{ env.tf_working_dir }}/ecr/terragrunt/dev"
+  ecr-planning:
+    name: ecr-planning
+    needs: ecr-validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Terragrunt Setup
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.43.0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Terragrunt Plan
+        run: |
+          terragrunt init --terragrunt-non-interactive
+          terragrunt run-all plan --terragrunt-non-interactive
+        working-directory: "${{ env.tf_working_dir }}/ecr/terragrunt/dev"
+  ecr-apply:
+    name: ecr-apply
+    needs: ecr-planning
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Terragrunt Setup
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.43.0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Terragrunt Apply
+        run: |
+          terragrunt init --terragrunt-non-interactive
+          terragrunt run-all apply --terragrunt-non-interactive
+        working-directory: "${{ env.tf_working_dir }}/ecr/terragrunt/dev"
+  build-and-test:
+    name: Build and Test
+    needs: ecr-apply
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.15
+      - name: Test
+        run: go test -v ./...
+        working-directory: ./motivate
+      - name: Build
+        run: go build -v ./...
+        working-directory: ./motivate
+      - name: Upload Motivate App Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: motivate-app
+          path: ./motivate/application
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      - name: Build, tag, and push docker image to Amazon ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: sheehandustryn-ecr-repo
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
+          docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+        working-directory: ./motivate
+  motivate-k8s-formatting:
+    name: motivate-k8s-formatting
+    needs:
+      - eks-apply
+      - consul-apply
+      - ecr-apply
+      - build-and-test
+      - secrets-gen
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: terraform-format
+        uses: the-commons-project/terragrunt-github-actions@master
+        with:
+          tf_actions_version: ${{ env.tf_version }}
+          tg_actions_version: ${{ env.tg_version }}
+          tf_actions_binary: terraform
+          tf_actions_subcommand: fmt
+          tf_actions_working_dir: "${{ env.tf_working_dir }}/motivate-terragrunt/terraform/motivate"
+          tf_actions_comment: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  motivate-k8s-validation:
+    name: motivate-k8s-validation
+    needs: motivate-k8s-formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Download secrets
+        uses: actions/download-artifact@v3
+        with:
+          name: secrets
+          path: "${{ env.tf_working_dir }}/motivate-terragrunt/terragrunt/dev"
+      - name: Terragrunt Setup
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.43.0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Terragrunt Validate
+        run: |
+          terragrunt init --terragrunt-non-interactive
+          terragrunt validate --terragrunt-non-interactive
+        working-directory: "${{ env.tf_working_dir }}/motivate-terragrunt/terragrunt/dev"
+  motivate-k8s-plan:
+    name: motivate-k8s-plan
+    needs: motivate-k8s-validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Download secrets
+        uses: actions/download-artifact@v3
+        with:
+          name: secrets
+          path: "${{ env.tf_working_dir }}/motivate-terragrunt/terragrunt/dev"
+      - name: Terragrunt Setup
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.43.0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Terragrunt Plan
+        run: |
+          terragrunt init --terragrunt-non-interactive
+          terragrunt run-all plan --terragrunt-non-interactive
+        working-directory: "${{ env.tf_working_dir }}/motivate-terragrunt/terragrunt/dev"
+  motivate-k8s-apply:
+    name: motivate-k8s-apply
+    needs: motivate-k8s-plan
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@master
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.READ_ROLE }}
+          role-session-name: OIDCSession
+      - name: Download secrets
+        uses: actions/download-artifact@v3
+        with:
+          name: secrets
+          path: "${{ env.tf_working_dir }}/motivate-terragrunt/terragrunt/dev"
+      - name: Update helm
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: sheehandustryn-ecr-repo
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          sed -i 's/image:/image: ${REGISTRY}\/${REPOSITORY}:${IMAGE_TAG}/' ./motivate-terragrunt/chart/motivate-chart/templates/deployment.yaml
+      - name: Terragrunt Setup
+        uses: autero1/action-terragrunt@v1.1.0
+        with:
+          terragrunt_version: 0.43.0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Terragrunt Apply
+        run: |
+          terragrunt init --terragrunt-non-interactive
+          terragrunt run-all apply --terragrunt-non-interactive
+        working-directory: "${{ env.tf_working_dir }}/motivate-terragrunt/terragrunt/dev"
